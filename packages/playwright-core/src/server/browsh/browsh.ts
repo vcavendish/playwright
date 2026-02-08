@@ -15,6 +15,7 @@
  */
 
 import { BrowshBrowser } from './browshBrowser';
+import { BrowshTransport } from './browshTransport';
 import { wrapInASCIIBox } from '../utils/ascii';
 import { BrowserType } from '../browserType';
 import { ManualPromise } from '../../utils/isomorphic/manualPromise';
@@ -32,12 +33,18 @@ import type { RecentLogsCollector } from '../utils/debugLogger';
  * firefox, webkit. We communicate only through Browsh's WebSocket API
  * and never touch its internal Firefox directly.
  *
+ * Architecture boundary: Browsh speaks its own wire format ({command, args} /
+ * {success, data, error}). BrowshTransport wraps the raw WebSocket on the
+ * Playwright side and translates to/from Playwright's internal protocol.
+ * This follows the same pattern as CRConnection (Chrome/CDP) and
+ * FFConnection (Firefox/Juggler) — the adapter lives in Playwright, the
+ * browser never needs to know about Playwright internals.
+ *
  * Key differences from other browsers:
  * - Uses WebSocket JSON command protocol (not CDP or Juggler)
  * - Each launch() spawns a separate Browsh+Firefox process on its own port
  * - browser.newContext() spawns a new Browsh process (full isolation)
  * - No pipe transport — always connects via WebSocket
- * - Port auto-assigned via `--remote-control-port=0` (or explicit port)
  */
 export class Browsh extends BrowserType {
   constructor(parent: SdkObject) {
@@ -45,10 +52,11 @@ export class Browsh extends BrowserType {
   }
 
   override async connectToTransport(transport: ConnectionTransport, options: BrowserOptions, browserLogsCollector: RecentLogsCollector): Promise<BrowshBrowser> {
-    // The base class already connected to browsh's WebSocket via
-    // WebSocketTransport.connect(). We wrap it in BrowshBrowser which
-    // tracks the transport for lifecycle management (close/disconnect).
-    return BrowshBrowser.connect(this.attribution.playwright, transport, options);
+    // Wrap the raw WebSocketTransport in BrowshTransport which translates
+    // between Playwright protocol and Browsh's native command format.
+    // Browsh never sees Playwright concepts — all translation happens here.
+    const browshTransport = new BrowshTransport(transport);
+    return BrowshBrowser.connect(this.attribution.playwright, browshTransport, options);
   }
 
   override doRewriteStartupLog(logs: string): string {
@@ -64,8 +72,10 @@ export class Browsh extends BrowserType {
   }
 
   override attemptToGracefullyCloseBrowser(transport: ConnectionTransport): void {
-    // Browsh protocol: send shutdown command to gracefully close
-    transport.send({ method: 'shutdown', params: {}, id: -1 });
+    // Send browsh's native shutdown command directly over the raw transport.
+    // The type cast is intentional — we're crossing the protocol boundary.
+    // Browsh doesn't know about Playwright; it only understands {command, args}.
+    transport.send({ command: 'shutdown' } as any);
   }
 
   override async defaultArgs(options: types.LaunchOptions, isPersistent: boolean, userDataDir: string): Promise<string[]> {
