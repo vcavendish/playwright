@@ -76,8 +76,10 @@ class BrowshPage extends EventEmitter {
       if (oldest) {
         const [id, { resolve, reject }] = oldest;
         this._pendingRequests.delete(id);
-        if (msg.success) resolve(msg);
-        else reject(new Error(msg.error || 'Command failed'));
+        if (msg.success)
+          resolve(msg);
+        else
+          reject(new Error(msg.error || 'Command failed'));
       }
     });
 
@@ -91,11 +93,13 @@ class BrowshPage extends EventEmitter {
 
   private _send(command: string, args?: string): Promise<any> {
     return new Promise((resolve, reject) => {
-      if (this._closed) return reject(new Error('Page is closed'));
+      if (this._closed)
+        return reject(new Error('Page is closed'));
       const id = ++this._requestId;
       this._pendingRequests.set(id, { resolve, reject });
       const msg: any = { command };
-      if (args !== undefined) msg.args = args;
+      if (args !== undefined)
+        msg.args = args;
       this._ws.send(JSON.stringify(msg));
     });
   }
@@ -273,15 +277,18 @@ class BrowshLocator {
   }
 
   async _resolveSelector(): Promise<{ resolvedSelector: string }> {
-    if (!this._ref) throw new Error('No ref in selector: ' + this._selector);
+    if (!this._ref)
+      throw new Error('No ref in selector: ' + this._selector);
     const refInfo = this._page._refMap[this._ref];
-    if (!refInfo) throw new Error(`Ref ${this._ref} not found in snapshot`);
+    if (!refInfo)
+      throw new Error(`Ref ${this._ref} not found in snapshot`);
     const name = refInfo.name ? `, { name: '${refInfo.name.replace(/'/g, "\\'")}' }` : '';
     return { resolvedSelector: `getByRole('${refInfo.role}'${name})` };
   }
 
   async click(_options?: any): Promise<void> {
-    if (!this._ref) throw new Error('Cannot click without ref');
+    if (!this._ref)
+      throw new Error('Cannot click without ref');
     await (this._page as any)._send('click_ref', this._ref);
   }
 
@@ -294,13 +301,15 @@ class BrowshLocator {
   }
 
   async dblclick(_options?: any): Promise<void> {
-    if (!this._ref) throw new Error('Cannot dblclick without ref');
+    if (!this._ref)
+      throw new Error('Cannot dblclick without ref');
     await (this._page as any)._send('click_ref', this._ref);
     await (this._page as any)._send('click_ref', this._ref);
   }
 
   async fill(value: string, _options?: any): Promise<void> {
-    if (!this._ref) throw new Error('Cannot fill without ref');
+    if (!this._ref)
+      throw new Error('Cannot fill without ref');
     await (this._page as any)._send('click_ref', this._ref);
     await new Promise(r => setTimeout(r, 100));
     await this._page.evaluate(`(() => {
@@ -314,7 +323,8 @@ class BrowshLocator {
   }
 
   async type(text: string, _options?: any): Promise<void> {
-    if (!this._ref) throw new Error('Cannot type without ref');
+    if (!this._ref)
+      throw new Error('Cannot type without ref');
     await (this._page as any)._send('click_ref', this._ref);
     await new Promise(r => setTimeout(r, 100));
     await (this._page as any)._send('type', text);
@@ -325,7 +335,8 @@ class BrowshLocator {
   }
 
   async hover(_options?: any): Promise<void> {
-    if (!this._ref) throw new Error('Cannot hover without ref');
+    if (!this._ref)
+      throw new Error('Cannot hover without ref');
     // Move to element — Browsh doesn't support hover natively, click focuses it
     await (this._page as any)._send('click_ref', this._ref);
   }
@@ -339,7 +350,8 @@ class BrowshLocator {
   async setChecked(checked: boolean, _options?: any): Promise<void> { await this.click(_options); }
 
   async selectOption(values: string | string[], _options?: any): Promise<string[]> {
-    if (!this._ref) throw new Error('Cannot selectOption without ref');
+    if (!this._ref)
+      throw new Error('Cannot selectOption without ref');
     const vals = Array.isArray(values) ? values : [values];
     await (this._page as any)._send('click_ref', this._ref);
     // Use evaluate to set select value
@@ -403,7 +415,8 @@ class BrowshBrowserContext extends EventEmitter {
   }
   async close() {
     this._closed = true;
-    for (const page of this._pages) await page.close().catch(() => {});
+    for (const page of this._pages)
+      await page.close().catch(() => {});
     this._pages = [];
     this.emit('close');
   }
@@ -456,7 +469,8 @@ export class BrowshContextFactory implements BrowserContextFactory {
   }
 
   private async _resolveUrl(): Promise<string> {
-    if (this._explicitUrl) return this._explicitUrl;
+    if (this._explicitUrl)
+      return this._explicitUrl;
 
     const portFromFile = this._readPortFile();
     if (portFromFile && await this._isPortOpen(portFromFile))
@@ -478,7 +492,8 @@ export class BrowshContextFactory implements BrowserContextFactory {
       try {
         const content = fs.readFileSync(candidate, 'utf8').trim();
         const port = parseInt(content, 10);
-        if (port > 0 && port < 65536) return port;
+        if (port > 0 && port < 65536)
+          return port;
       } catch {}
     }
     return null;
@@ -501,7 +516,7 @@ export class BrowshContextFactory implements BrowserContextFactory {
       const timeout = setTimeout(() => {
         ws.close();
         reject(new Error(
-          `Could not connect to Browsh at ${wsUrl}. ` +
+            `Could not connect to Browsh at ${wsUrl}. ` +
           `Make sure Browsh is running with --remote-control flag.`
         ));
       }, 5000);
