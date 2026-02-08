@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import net from 'net';
+
 import { BrowshBrowser } from './browshBrowser';
 import { BrowshConnection } from './browshConnection';
 import { wrapInASCIIBox } from '../utils/ascii';
@@ -25,6 +27,17 @@ import type { SdkObject } from '../instrumentation';
 import type { ConnectionTransport } from '../transport';
 import type * as types from '../types';
 import type { RecentLogsCollector } from '../utils/debugLogger';
+
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, () => {
+      const { port } = server.address() as net.AddressInfo;
+      server.close(() => resolve(port));
+    });
+    server.on('error', reject);
+  });
+}
 
 /**
  * Browsh BrowserType implementation.
@@ -82,10 +95,14 @@ export class Browsh extends BrowserType {
     const { args = [], headless } = options;
     const browshArgs = ['--remote-control'];
 
-    // Pass port if specified (used by multi-instance support in Phase 6F)
-    const port = (options as any).__browshPort;
-    if (port !== undefined)
-      browshArgs.push(`--remote-control-port=${port}`);
+    // Auto-assign a free port for multi-instance support.
+    // Each launch() gets its own port so multiple browsh instances coexist.
+    let port = (options as any).__browshPort;
+    if (port === undefined) {
+      port = await findFreePort();
+      (options as any).__browshPort = port;
+    }
+    browshArgs.push(`--remote-control-port=${port}`);
 
     // Headless for browsh means no terminal TUI — just the WebSocket API
     if (headless)
