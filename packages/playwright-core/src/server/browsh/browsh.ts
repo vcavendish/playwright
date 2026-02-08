@@ -89,8 +89,8 @@ export class Browsh extends BrowserType {
       (options as any).__browshPort = port;
     }
     browshArgs.push(`--remote-control-port=${port}`);
-    // Auto-assign internal ports so multiple browsh instances don't conflict
-    browshArgs.push('--marionette-port=0', '--websocket-port=0');
+    // Auto-assign marionette port to avoid conflicts with default 2828
+    browshArgs.push('--marionette-port=0');
 
     if (options.headless === false)
       browshArgs.push('--firefox.with-gui');
