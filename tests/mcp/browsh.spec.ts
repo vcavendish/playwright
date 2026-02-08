@@ -20,6 +20,7 @@ import { test, expect } from './fixtures';
 // Requires PLAYWRIGHT_BROWSH_PATH pointing to the browsh fork binary.
 // Run serially since browsh uses a shared Firefox profile.
 test.describe.configure({ mode: 'serial' });
+test.use({ mcpBrowser: 'browsh' });
 
 // --- Navigation ---
 

@@ -68,6 +68,10 @@ export class BrowshPage implements PageDelegate {
   }
 
   async initialize() {
+    // Fire initial lifecycle events so _loadDefaultContext can resolve.
+    // Browsh's tab is already loaded when we connect (it opens brow.sh by default).
+    this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
+    this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
     // Signal that the page is ready for use.
     this._page.reportAsNew(undefined);
   }

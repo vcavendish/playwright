@@ -36,6 +36,21 @@ export type LaunchProcessOptions = {
 
   cwd?: string,
 
+  // Override the default detached behavior. By default, detached is true on
+  // non-Windows (for process group kill) and false on Windows.
+  // Set to true on Windows to give the child its own console window.
+  detached?: boolean,
+
+  // Override the stdio array for the spawned process. When set, this takes
+  // precedence over the `stdio` field. Use to give TUI processes their own
+  // stdout (e.g. ['ignore', 'ignore', 'pipe'] to only capture stderr).
+  stdioOverride?: childProcess.StdioOptions,
+
+  // Hide the spawned process window on Windows. Used when the command is a
+  // wrapper (e.g. cmd /c start) that should be invisible while the actual
+  // browser creates its own visible window.
+  windowsHide?: boolean,
+
   // Note: attemptToGracefullyClose should reject if it does not close the browser.
   attemptToGracefullyClose: () => Promise<any>,
   onExit: (exitCode: number | null, signal: string | null) => void,
@@ -129,17 +144,19 @@ function removeProcessHandlersIfNeeded() {
 }
 
 export async function launchProcess(options: LaunchProcessOptions): Promise<LaunchResult> {
-  const stdio: ('ignore' | 'pipe')[] = options.stdio === 'pipe' ? ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'];
+  const stdio: childProcess.StdioOptions = options.stdioOverride ??
+    (options.stdio === 'pipe' ? ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe']);
   options.log(`<launching> ${options.command} ${options.args ? options.args.join(' ') : ''}`);
   const spawnOptions: childProcess.SpawnOptions = {
     // On non-windows platforms, `detached: true` makes child process a leader of a new
     // process group, making it possible to kill child process tree with `.kill(-pid)` command.
     // @see https://nodejs.org/api/child_process.html#child_process_options_detached
-    detached: process.platform !== 'win32',
+    detached: options.detached ?? (process.platform !== 'win32'),
     env: options.env,
     cwd: options.cwd,
     shell: options.shell,
     stdio,
+    windowsHide: options.windowsHide,
   };
   const spawnedProcess = childProcess.spawn(options.command, options.args || [], spawnOptions);
 
@@ -169,15 +186,19 @@ export async function launchProcess(options: LaunchProcessOptions): Promise<Laun
   }
   options.log(`<launched> pid=${spawnedProcess.pid}`);
 
-  const stdout = readline.createInterface({ input: spawnedProcess.stdout! });
-  stdout.on('line', (data: string) => {
-    options.log(`[pid=${spawnedProcess.pid}][out] ` + data);
-  });
+  if (spawnedProcess.stdout) {
+    const stdout = readline.createInterface({ input: spawnedProcess.stdout });
+    stdout.on('line', (data: string) => {
+      options.log(`[pid=${spawnedProcess.pid}][out] ` + data);
+    });
+  }
 
-  const stderr = readline.createInterface({ input: spawnedProcess.stderr! });
-  stderr.on('line', (data: string) => {
-    options.log(`[pid=${spawnedProcess.pid}][err] ` + data);
-  });
+  if (spawnedProcess.stderr) {
+    const stderr = readline.createInterface({ input: spawnedProcess.stderr });
+    stderr.on('line', (data: string) => {
+      options.log(`[pid=${spawnedProcess.pid}][err] ` + data);
+    });
+  }
 
   let processClosed = false;
   let fulfillCleanup = () => {};

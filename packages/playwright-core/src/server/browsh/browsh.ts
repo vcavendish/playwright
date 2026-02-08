@@ -42,22 +42,16 @@ function findFreePort(): Promise<number> {
 /**
  * Browsh BrowserType implementation.
  *
- * Browsh is treated as a first-class browser — same status as chromium,
- * firefox, webkit. We communicate only through Browsh's WebSocket API
- * and never touch its internal Firefox directly.
+ * Browsh is a first-class browser type — same status as chromium, firefox,
+ * webkit. We communicate only through Browsh's WebSocket API and never
+ * touch its internal Firefox directly.
  *
- * Architecture boundary: Browsh speaks its own wire format ({command, args} /
- * {success, data, error}). BrowshTransport wraps the raw WebSocket on the
- * Playwright side and translates to/from Playwright's internal protocol.
- * This follows the same pattern as CRConnection (Chrome/CDP) and
- * FFConnection (Firefox/Juggler) — the adapter lives in Playwright, the
- * browser never needs to know about Playwright internals.
- *
- * Key differences from other browsers:
- * - Uses WebSocket JSON command protocol (not CDP or Juggler)
- * - Each launch() spawns a separate Browsh+Firefox process on its own port
- * - browser.newContext() spawns a new Browsh process (full isolation)
- * - No pipe transport — always connects via WebSocket
+ * Key difference from other browsers: Browsh is a TUI application that
+ * renders to a terminal via tcell. It needs its own console window, not
+ * piped stdio. We use the same extension points as other browsers
+ * (defaultArgs, waitForReadyState, connectToTransport, etc.) but configure
+ * the process launcher to give browsh a detached console and detect
+ * readiness by polling the WebSocket port.
  */
 export class Browsh extends BrowserType {
   constructor(parent: SdkObject) {
@@ -65,9 +59,6 @@ export class Browsh extends BrowserType {
   }
 
   override async connectToTransport(transport: ConnectionTransport, options: BrowserOptions, browserLogsCollector: RecentLogsCollector): Promise<BrowshBrowser> {
-    // Create a BrowshConnection that wraps the raw WebSocketTransport.
-    // Connection handles protocol translation (Playwright ↔ Browsh).
-    // Transport handles raw I/O. Same separation as CRConnection/FFConnection.
     const connection = new BrowshConnection(transport, options.protocolLogger, browserLogsCollector);
     return BrowshBrowser.connect(this.attribution.playwright, connection, options);
   }
@@ -85,9 +76,6 @@ export class Browsh extends BrowserType {
   }
 
   override attemptToGracefullyCloseBrowser(transport: ConnectionTransport): void {
-    // Send browsh's native shutdown command directly over the raw transport.
-    // The type cast is intentional — we're crossing the protocol boundary.
-    // Browsh doesn't know about Playwright; it only understands {command, args}.
     transport.send({ command: 'shutdown' } as any);
   }
 
@@ -95,8 +83,6 @@ export class Browsh extends BrowserType {
     const { args = [] } = options;
     const browshArgs = ['--remote-control'];
 
-    // Auto-assign a free port for multi-instance support.
-    // Each launch() gets its own port so multiple browsh instances coexist.
     let port = (options as any).__browshPort;
     if (port === undefined) {
       port = await findFreePort();
@@ -104,8 +90,6 @@ export class Browsh extends BrowserType {
     }
     browshArgs.push(`--remote-control-port=${port}`);
 
-    // Browsh's internal Firefox is headless by default.
-    // Use --firefox.with-gui only when headed mode is explicitly requested.
     if (options.headless === false)
       browshArgs.push('--firefox.with-gui');
 
@@ -114,30 +98,72 @@ export class Browsh extends BrowserType {
   }
 
   override supportsPipeTransport(): boolean {
+    // Browsh communicates via WebSocket, not pipe transport.
+    // This tells _launchProcess to use WebSocketTransport.connect(wsEndpoint)
+    // instead of PipeTransport on stdio fds 3/4.
     return false;
   }
 
+  override launchProcessOptions(): {
+    detached?: boolean,
+    stdioOverride?: import('child_process').StdioOptions,
+    wrapCommand?: (command: string, args: string[]) => { command: string, args: string[] },
+    shell?: boolean,
+  } {
+    // Browsh is a TUI app — it needs a real console window for tcell rendering.
+    // On Windows, `start` creates a new console window. shell: true runs
+    // the command through cmd.exe so `start` is available as a built-in.
+    // On Unix, detached: true creates a new process group.
+    if (process.platform === 'win32') {
+      return {
+        shell: true,
+        stdioOverride: ['ignore', 'ignore', 'ignore'],
+        wrapCommand: (command, args) => ({
+          command: 'start',
+          args: ['"Browsh"', '/wait', command.replace(/\\/g, '/'), ...args],
+        }),
+      };
+    }
+    return {
+      detached: true,
+      stdioOverride: ['ignore', 'ignore', 'ignore'],
+    };
+  }
+
   override waitForReadyState(options: types.LaunchOptions, browserLogsCollector: RecentLogsCollector): Promise<{ wsEndpoint?: string }> {
+    const port = (options as any).__browshPort || 3335;
+    const wsEndpoint = `ws://127.0.0.1:${port}`;
     const result = new ManualPromise<{ wsEndpoint?: string }>();
 
+    // Primary: detect ready signal from browsh's stderr log output.
     browserLogsCollector.onMessage((message: string) => {
-      // Browsh logs "Remote control listening on :PORT" or similar on ready
       if (message.includes('Remote control listening') || message.includes('WebSocket server started')) {
-        // Try to extract port from log message
         const portMatch = message.match(/:(\d+)/);
-        const port = portMatch ? parseInt(portMatch[1], 10) : ((options as any).__browshPort || 3335);
-        result.resolve({ wsEndpoint: `ws://127.0.0.1:${port}` });
+        const detectedPort = portMatch ? parseInt(portMatch[1], 10) : port;
+        result.resolve({ wsEndpoint: `ws://127.0.0.1:${detectedPort}` });
       }
     });
 
-    // Fallback: if browsh doesn't print the expected ready message,
-    // assume it's ready after a timeout using the configured port
-    setTimeout(() => {
-      if (!result.isDone()) {
-        const port = (options as any).__browshPort || 3335;
-        result.resolve({ wsEndpoint: `ws://127.0.0.1:${port}` });
-      }
-    }, 10000);
+    // Fallback: poll the WebSocket port directly.
+    // Browsh is a TUI app that may launch in its own console window
+    // (detached: true). If stdio is not piped, log messages won't reach
+    // browserLogsCollector. Port polling detects readiness regardless.
+    const pollPort = () => {
+      if (result.isDone())
+        return;
+      const socket = net.connect(port, '127.0.0.1');
+      socket.once('connect', () => {
+        socket.destroy();
+        if (!result.isDone())
+          result.resolve({ wsEndpoint });
+      });
+      socket.once('error', () => {
+        socket.destroy();
+        if (!result.isDone())
+          setTimeout(pollPort, 500);
+      });
+    };
+    setTimeout(pollPort, 1000);
 
     return result;
   }
