@@ -27,7 +27,7 @@ import type { Progress } from '../progress';
 import type * as types from '../types';
 import type * as channels from '@protocol/channels';
 
-const kDummyFrameId = '__browsh_main_frame__';
+const kBrowshMainFrameId = 'browsh-main-frame';
 
 /**
  * BrowshPage — PageDelegate implementation for Browsh.
@@ -36,9 +36,11 @@ const kDummyFrameId = '__browsh_main_frame__';
  * The Page class handles all Playwright API surface; this delegate handles
  * the browser-specific I/O, same as CRPage does for Chrome.
  *
- * Browsh is a single-tab, single-frame browser from Playwright's perspective.
- * No iframes, no workers, no service workers. Methods related to those concepts
- * are no-ops or return appropriate defaults.
+ * Iframe support: Browsh's remote control API currently executes scripts
+ * via Marionette's WebDriver:ExecuteScript in the top-level document context.
+ * It cannot cross into child frames. To support iframes, browsh would need
+ * to use Marionette's WebDriver:SwitchToFrame and report child frames via
+ * frameAttached events so Playwright can manage execution contexts per frame.
  */
 export class BrowshPage implements PageDelegate {
   readonly rawKeyboard: RawKeyboardImpl;
@@ -47,6 +49,7 @@ export class BrowshPage implements PageDelegate {
   readonly _page: Page;
   readonly _connection: BrowshConnection;
   readonly _browserContext: BrowshBrowserContext;
+  private readonly _mainFrameId = kBrowshMainFrameId;
 
   constructor(connection: BrowshConnection, browserContext: BrowshBrowserContext) {
     this._connection = connection;
@@ -56,8 +59,12 @@ export class BrowshPage implements PageDelegate {
     this.rawTouchscreen = new RawTouchscreenImpl(connection);
     this._page = new Page(this, browserContext);
 
-    // Create a main frame — browsh is always single-frame.
-    this._page.frameManager.createDummyMainFrameIfNeeded();
+    // Attach main frame. Uses frameAttached like Chrome/Firefox do when
+    // they receive a frame event from the browser protocol.
+    // Child frames (iframes) are not yet supported — browsh's remote control
+    // API would need WebDriver:SwitchToFrame to enter child frame contexts
+    // and report them here via additional frameAttached calls.
+    this._page.frameManager.frameAttached(this._mainFrameId, null);
   }
 
   async initialize() {
@@ -69,9 +76,9 @@ export class BrowshPage implements PageDelegate {
     await this._connection.send('navigate', { url });
     // Signal the frame that a new document navigation occurred.
     const documentId = createGuid();
-    this._page.frameManager.frameCommittedNewDocumentNavigation(kDummyFrameId, url, '', documentId, false);
-    this._page.frameManager.frameLifecycleEvent(kDummyFrameId, 'load');
-    this._page.frameManager.frameLifecycleEvent(kDummyFrameId, 'domcontentloaded');
+    this._page.frameManager.frameCommittedNewDocumentNavigation(this._mainFrameId, url, '', documentId, false);
+    this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
+    this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
     return { newDocumentId: documentId };
   }
 
@@ -79,9 +86,9 @@ export class BrowshPage implements PageDelegate {
     await this._connection.send('reload');
     const url = this._page.mainFrame().url();
     const documentId = createGuid();
-    this._page.frameManager.frameCommittedNewDocumentNavigation(kDummyFrameId, url, '', documentId, false);
-    this._page.frameManager.frameLifecycleEvent(kDummyFrameId, 'load');
-    this._page.frameManager.frameLifecycleEvent(kDummyFrameId, 'domcontentloaded');
+    this._page.frameManager.frameCommittedNewDocumentNavigation(this._mainFrameId, url, '', documentId, false);
+    this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
+    this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
   }
 
   async goBack(): Promise<boolean> {
@@ -126,11 +133,9 @@ export class BrowshPage implements PageDelegate {
   async setBackgroundColor(_color?: { r: number; g: number; b: number; a: number }): Promise<void> { }
 
   async takeScreenshot(progress: Progress, format: string, documentRect: types.Rect | undefined, viewportRect: types.Rect | undefined, quality: number | undefined, _fitsViewport: boolean, _scale: 'css' | 'device'): Promise<Buffer> {
-    const result = await this._connection.send('screenshot');
-    if (result?.data) {
-      // Browsh returns base64-encoded screenshot data.
-      return Buffer.from(result.data, 'base64');
-    }
+    const data = await this._connection.send('screenshot');
+    if (typeof data === 'string' && data.length > 0)
+      return Buffer.from(data, 'base64');
     return Buffer.alloc(0);
   }
 
