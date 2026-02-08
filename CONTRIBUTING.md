@@ -82,7 +82,7 @@ git rebase upstream/main
 git push origin my-feature-branch --force-with-lease
 ```
 
-Note: `--force-with-lease` is safer than `--force` as it ensures you don't overwrite changes that others have pushed to the remote branch since your last fetch.
+Note: `--force-with-lease` is safer than `--force` as it ensures you don't accidentally overwrite remote changes that weren't present when you last fetched.
 
 ### Setting up your development environment
 
