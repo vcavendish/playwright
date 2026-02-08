@@ -16176,7 +16176,7 @@ type DeviceDescriptor = {
   deviceScaleFactor: number;
   isMobile: boolean;
   hasTouch: boolean;
-  defaultBrowserType: 'chromium' | 'firefox' | 'webkit';
+  defaultBrowserType: 'chromium' | 'firefox' | 'webkit' | 'browsh';
 };
 
 export namespace errors {
@@ -20718,6 +20718,12 @@ export interface Mouse {
    */
   wheel(deltaX: number, deltaY: number): Promise<void>;
 }
+
+/**
+ * This object can be used to launch or connect to Browsh, returning instances of
+ * [Browser](https://playwright.dev/docs/api/class-browser).
+ */
+export const browsh: BrowserType;
 
 /**
  * This object can be used to launch or connect to Chromium, returning instances of

@@ -38,7 +38,7 @@ export type Config = {
     /**
      * The type of browser to use.
      */
-    browserName?: 'chromium' | 'firefox' | 'webkit';
+    browserName?: 'chromium' | 'firefox' | 'webkit' | 'browsh';
 
     /**
      * Keep the browser profile in memory, do not save it to disk.

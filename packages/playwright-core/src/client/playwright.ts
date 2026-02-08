@@ -32,6 +32,7 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
   readonly chromium: BrowserType;
   readonly firefox: BrowserType;
   readonly webkit: BrowserType;
+  readonly browsh: BrowserType;
   readonly devices: any;
   selectors: Selectors;
   readonly request: APIRequest;
@@ -51,6 +52,8 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
     this.firefox._playwright = this;
     this.webkit = BrowserType.from(initializer.webkit);
     this.webkit._playwright = this;
+    this.browsh = BrowserType.from(initializer.browsh);
+    this.browsh._playwright = this;
     this._android = Android.from(initializer.android);
     this._android._playwright = this;
     this._electron = Electron.from(initializer.electron);
@@ -65,12 +68,12 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
   }
 
   private _browserTypes(): BrowserType[] {
-    return [this.chromium, this.firefox, this.webkit];
+    return [this.chromium, this.firefox, this.webkit, this.browsh];
   }
 
   _preLaunchedBrowser(): Browser {
     const browser = Browser.from(this._initializer.preLaunchedBrowser!);
-    browser._connectToBrowserType(this[browser._name as 'chromium' | 'firefox' | 'webkit'], {}, undefined);
+    browser._connectToBrowserType(this[browser._name as 'chromium' | 'firefox' | 'webkit' | 'browsh'], {}, undefined);
     return browser;
   }
 

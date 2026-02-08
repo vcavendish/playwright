@@ -547,7 +547,7 @@ function readDescriptors(browsersJSON: BrowsersJSON): BrowsersJSONDescriptor[] {
   });
 }
 
-export type BrowserName = 'chromium' | 'firefox' | 'webkit';
+export type BrowserName = 'chromium' | 'firefox' | 'webkit' | 'browsh';
 const allDownloadableDirectoriesThatEverExisted = ['android', 'chromium', 'firefox', 'webkit', 'ffmpeg', 'firefox-beta', 'chromium-tip-of-tree', 'chromium-headless-shell', 'chromium-tip-of-tree-headless-shell', 'winldd'];
 const chromiumAliases = ['chrome-for-testing'];
 
@@ -786,6 +786,23 @@ export class Registry {
       'win32': '\\Mozilla Firefox\\firefox.exe',
     }));
 
+    // Browsh — system-installed terminal browser (not downloaded by Playwright)
+    this._executables.push({
+      name: 'browsh',
+      browserName: 'browsh',
+      directory: undefined,
+      executablePath: () => this._findBrowshExecutable(),
+      executablePathOrDie: (sdkLanguage: string) => {
+        const path = this._findBrowshExecutable();
+        if (path)
+          return path;
+        throw new Error('Browsh is not installed. Install browsh and ensure it is available on your PATH. See https://www.brow.sh/docs/installation/');
+      },
+      installType: 'none',
+      _validateHostRequirements: () => Promise.resolve(),
+      _isHermeticInstallation: false,
+    });
+
     const firefox = descriptors.find(d => d.name === 'firefox')!;
     const firefoxExecutable = findExecutablePath(firefox.dir, 'firefox');
     this._executables.push({
@@ -1008,6 +1025,18 @@ export class Registry {
       _isHermeticInstallation: true,
       _install: install,
     };
+  }
+
+  private _findBrowshExecutable(): string | undefined {
+    // Look for browsh on PATH
+    const name = process.platform === 'win32' ? 'browsh.exe' : 'browsh';
+    const pathDirs = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
+    for (const dir of pathDirs) {
+      const candidate = path.join(dir, name);
+      if (canAccessFile(candidate))
+        return candidate;
+    }
+    return undefined;
   }
 
   executables(): Executable[] {
