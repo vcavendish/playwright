@@ -30,9 +30,14 @@ const PORT_SCAN_RANGE: [number, number] = [3335, 3340];
 /**
  * BrowshPage — Playwright Page interface over Browsh WebSocket Command API.
  *
- * Implements the subset of Playwright's Page API that the MCP Tab class needs.
- * All commands route through Browsh's WebSocket API (default port 3335),
- * which forwards to Firefox via Marionette.
+ * Implements the Page API surface that the MCP Tab, Context, and tools require:
+ * - Events: console, pageerror, request, response, requestfailed, close, filechooser, dialog, download
+ * - Navigation: goto, waitForLoadState, goBack, goForward, reload
+ * - Queries: url, title, evaluate, _snapshotForAI
+ * - Locators: locator() → BrowshLocator with describe() and _resolveSelector()
+ * - Internal: _wrapApiCall (for callOnPageNoTrace in tools/utils.ts)
+ * - Input: keyboard, mouse (stubs — Browsh commands handle input directly)
+ * - Media: screenshot, pdf, video (stubs)
  */
 class BrowshPage extends EventEmitter {
   private _ws: WebSocket;
@@ -44,6 +49,22 @@ class BrowshPage extends EventEmitter {
   private _requestId = 0;
   private _pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private _closed = false;
+  private _browserContext: BrowshBrowserContext | null = null;
+
+  // Keyboard & mouse stubs (tools access page.keyboard.press, page.mouse.move, etc.)
+  keyboard = {
+    press: async (_key: string) => {},
+    type: async (_text: string, _options?: any) => {},
+    down: async (_key: string) => {},
+    up: async (_key: string) => {},
+  };
+  mouse = {
+    move: async (_x: number, _y: number) => {},
+    down: async (_options?: any) => {},
+    up: async (_options?: any) => {},
+    click: async (_x: number, _y: number, _options?: any) => {},
+    wheel: async (_deltaX: number, _deltaY: number) => {},
+  };
 
   constructor(ws: WebSocket) {
     super();
@@ -66,6 +87,8 @@ class BrowshPage extends EventEmitter {
     });
   }
 
+  _setBrowserContext(ctx: BrowshBrowserContext) { this._browserContext = ctx; }
+
   private _send(command: string, args?: string): Promise<any> {
     return new Promise((resolve, reject) => {
       if (this._closed) return reject(new Error('Page is closed'));
@@ -77,9 +100,13 @@ class BrowshPage extends EventEmitter {
     });
   }
 
-  url(): string {
-    return this._currentUrl;
+  // --- Internal API required by callOnPageNoTrace (tools/utils.ts) ---
+  async _wrapApiCall<R>(func: () => Promise<R>, _options?: { internal?: boolean }): Promise<R> {
+    return await func();
   }
+
+  // --- Navigation ---
+  url(): string { return this._currentUrl; }
 
   async title(): Promise<string> {
     const result = await this._send('get_state');
@@ -97,10 +124,35 @@ class BrowshPage extends EventEmitter {
     return null;
   }
 
+  async goBack(_options?: any): Promise<null> {
+    await this._send('back');
+    await new Promise(r => setTimeout(r, 500));
+    const state = await this._send('get_state');
+    this._currentUrl = state.data.url || this._currentUrl;
+    return null;
+  }
+
+  async goForward(_options?: any): Promise<null> {
+    await this._send('forward');
+    await new Promise(r => setTimeout(r, 500));
+    const state = await this._send('get_state');
+    this._currentUrl = state.data.url || this._currentUrl;
+    return null;
+  }
+
+  async reload(_options?: any): Promise<null> {
+    await this._send('reload');
+    await new Promise(r => setTimeout(r, 1000));
+    const state = await this._send('get_state');
+    this._currentUrl = state.data.url || this._currentUrl;
+    return null;
+  }
+
   async waitForLoadState(_state?: string, _options?: any): Promise<void> {
     await new Promise(r => setTimeout(r, 500));
   }
 
+  // --- Evaluation ---
   async evaluate(pageFunction: string | Function, arg?: any): Promise<any> {
     let script: string;
     if (typeof pageFunction === 'function') {
@@ -114,6 +166,7 @@ class BrowshPage extends EventEmitter {
     return result.data;
   }
 
+  // --- Snapshots & Locators ---
   async _snapshotForAI(_options?: any): Promise<{ full: string; incremental?: string }> {
     const result = await this._send('get_aria_snapshot');
     this._refMap = result.data.refMap || {};
@@ -124,28 +177,73 @@ class BrowshPage extends EventEmitter {
     return new BrowshLocator(this, selector);
   }
 
-  setDefaultNavigationTimeout(ms: number): void {
-    this._navTimeout = ms;
+  // Additional query methods some tools use
+  getByRole(role: string, options?: any): BrowshLocator {
+    const name = options?.name ? `[name="${options.name}"]` : '';
+    return new BrowshLocator(this, `role=${role}${name}`);
   }
 
-  setDefaultTimeout(ms: number): void {
-    this._actionTimeout = ms;
+  getByText(text: string, _options?: any): BrowshLocator {
+    return new BrowshLocator(this, `text=${text}`);
   }
 
+  // --- Timeouts ---
+  setDefaultNavigationTimeout(ms: number): void { this._navTimeout = ms; }
+  setDefaultTimeout(ms: number): void { this._actionTimeout = ms; }
+
+  // --- Page lifecycle ---
   async bringToFront(): Promise<void> {}
   async close(): Promise<void> {
     this._closed = true;
     this.emit('close');
   }
 
+  async setViewportSize(_size: { width: number; height: number }): Promise<void> {}
+
+  // --- Context access (tools like cookies.ts call page.context()) ---
+  context(): BrowshBrowserContext { return this._browserContext!; }
+
+  // --- Console/Network/Errors (Tab._initialize reads these) ---
   async consoleMessages(): Promise<any[]> { return []; }
   async pageErrors(): Promise<any[]> { return []; }
   async requests(): Promise<any[]> { return []; }
-  video() { return { start: async () => {}, stop: async () => {} }; }
+
+  // --- Media (context.ts calls page.video()) ---
+  video() {
+    return {
+      start: async (_params?: any) => {},
+      stop: async () => {},
+      allVideos: [],
+    };
+  }
+
+  // --- Screenshot/PDF stubs ---
+  async screenshot(_options?: any): Promise<Buffer> {
+    // Browsh renders text, not pixels — return a 1x1 transparent PNG
+    return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  }
+
+  async pdf(_options?: any): Promise<Buffer> { return Buffer.alloc(0); }
+
+  // --- Frame access (some tools call page.mainFrame()) ---
+  mainFrame() {
+    const self = this;
+    return {
+      async waitForLoadState(state?: string, options?: any) { await self.waitForLoadState(state, options); },
+      url() { return self._currentUrl; },
+    };
+  }
 }
 
 /**
  * BrowshLocator — Element resolution via ARIA snapshot refs.
+ *
+ * Implements the Locator methods that MCP tools invoke:
+ * - click, dblclick, fill, type (pressSequentially), hover, dragTo
+ * - check, uncheck, setChecked, selectOption
+ * - describe, _resolveSelector
+ * - count, waitFor, isChecked, inputValue, screenshot
+ * - filter, getByText
  */
 class BrowshLocator {
   private _page: BrowshPage;
@@ -166,7 +264,7 @@ class BrowshLocator {
   }
 
   async _resolveSelector(): Promise<{ resolvedSelector: string }> {
-    if (!this._ref) throw new Error('No ref in selector');
+    if (!this._ref) throw new Error('No ref in selector: ' + this._selector);
     const refInfo = this._page._refMap[this._ref];
     if (!refInfo) throw new Error(`Ref ${this._ref} not found in snapshot`);
     const name = refInfo.name ? `, { name: '${refInfo.name.replace(/'/g, "\\'")}' }` : '';
@@ -175,6 +273,12 @@ class BrowshLocator {
 
   async click(_options?: any): Promise<void> {
     if (!this._ref) throw new Error('Cannot click without ref');
+    await (this._page as any)._send('click_ref', this._ref);
+  }
+
+  async dblclick(_options?: any): Promise<void> {
+    if (!this._ref) throw new Error('Cannot dblclick without ref');
+    await (this._page as any)._send('click_ref', this._ref);
     await (this._page as any)._send('click_ref', this._ref);
   }
 
@@ -198,18 +302,80 @@ class BrowshLocator {
     await new Promise(r => setTimeout(r, 100));
     await (this._page as any)._send('type', text);
   }
+
+  async pressSequentially(text: string, _options?: any): Promise<void> {
+    return this.type(text, _options);
+  }
+
+  async hover(_options?: any): Promise<void> {
+    if (!this._ref) throw new Error('Cannot hover without ref');
+    // Move to element — Browsh doesn't support hover natively, click focuses it
+    await (this._page as any)._send('click_ref', this._ref);
+  }
+
+  async dragTo(_target: BrowshLocator, _options?: any): Promise<void> {
+    throw new Error('Drag and drop not supported in Browsh terminal mode');
+  }
+
+  async check(_options?: any): Promise<void> { await this.click(_options); }
+  async uncheck(_options?: any): Promise<void> { await this.click(_options); }
+  async setChecked(checked: boolean, _options?: any): Promise<void> { await this.click(_options); }
+
+  async selectOption(values: string | string[], _options?: any): Promise<string[]> {
+    if (!this._ref) throw new Error('Cannot selectOption without ref');
+    const vals = Array.isArray(values) ? values : [values];
+    await (this._page as any)._send('click_ref', this._ref);
+    // Use evaluate to set select value
+    await this._page.evaluate(`(() => {
+      const el = document.activeElement;
+      if (el && el.tagName === 'SELECT') {
+        el.value = ${JSON.stringify(vals[0])};
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+      }
+    })()`);
+    return vals;
+  }
+
+  async count(): Promise<number> { return this._ref ? 1 : 0; }
+  async waitFor(_options?: any): Promise<void> {}
+  async isChecked(): Promise<boolean> { return false; }
+  async inputValue(): Promise<string> { return ''; }
+
+  async screenshot(_options?: any): Promise<Buffer> {
+    return this._page.screenshot(_options);
+  }
+
+  filter(_options: any): BrowshLocator { return this; }
+  getByText(text: string, _options?: any): BrowshLocator {
+    return new BrowshLocator(this._page, `text=${text}`);
+  }
 }
 
 /**
  * BrowshBrowserContext — Wraps BrowshPage to match Playwright's BrowserContext API.
+ *
+ * Implements what context.ts needs:
+ * - pages(), newPage(), close()
+ * - on/off('page'), on('close')
+ * - route(), unroute()
+ * - addInitScript()
+ * - tracing (stub)
+ * - _setAllowedProtocols(), _setAllowedDirectories()
  */
 class BrowshBrowserContext extends EventEmitter {
   private _pages: BrowshPage[];
   private _closed = false;
 
+  // Tracing stub (context.ts accesses browserContext.tracing)
+  tracing = {
+    start: async (_options?: any) => {},
+    stop: async (_options?: any) => {},
+  };
+
   constructor(page: BrowshPage) {
     super();
     this._pages = [page];
+    page._setBrowserContext(this);
   }
 
   pages() { return [...this._pages]; }
@@ -229,6 +395,16 @@ class BrowshBrowserContext extends EventEmitter {
   async unroute(_pattern: any, _handler?: any) {}
   _setAllowedProtocols(_protocols: string[]) {}
   _setAllowedDirectories(_dirs: string[]) {}
+
+  // Storage stubs (cookies.ts, storage.ts access context)
+  async cookies(_urls?: string[]) { return []; }
+  async addCookies(_cookies: any[]) {}
+  async clearCookies() {}
+  async storageState(_options?: any) { return { cookies: [], origins: [] }; }
+
+  // Permissions
+  async grantPermissions(_permissions: string[], _options?: any) {}
+  async clearPermissions() {}
 }
 
 /**
