@@ -20,6 +20,7 @@ import { BrowserContext } from '../browserContext';
 import type { BrowserOptions } from '../browser';
 import type * as types from '../types';
 import type { SdkObject } from '../instrumentation';
+import type { ConnectionTransport } from '../transport';
 
 /**
  * BrowshBrowser represents a running Browsh instance. Each launch() or
@@ -28,31 +29,38 @@ import type { SdkObject } from '../instrumentation';
  *
  * Unlike Chrome/Firefox which support multiple BrowserContexts within one
  * process (isolated profiles), Browsh has no internal concept of isolated
- * profiles. browser.newContext() spawns a new Browsh process — heavier
- * but semantically correct isolation.
+ * profiles. browser.newContext() triggers the MCP layer to spawn a new
+ * Browsh process — heavier but semantically correct isolation.
+ *
+ * The transport here is the WebSocket connection to browsh's remote control
+ * API. It is used for lifecycle management (close/disconnect detection)
+ * and for sending protocol-translated commands.
  */
 export class BrowshBrowser extends Browser {
   private _contexts: BrowserContext[] = [];
   private _version: string = 'browsh-1.0';
   private _connected: boolean = true;
-  private _wsEndpoint: string;
+  private _transport: ConnectionTransport;
 
-  constructor(parent: SdkObject, options: BrowserOptions, wsEndpoint: string) {
+  constructor(parent: SdkObject, transport: ConnectionTransport, options: BrowserOptions) {
     super(parent, options);
-    this._wsEndpoint = wsEndpoint;
+    this._transport = transport;
+
+    // Monitor transport lifecycle
+    const onClose = () => {
+      this._connected = false;
+      this.emit(Browser.Events.Disconnected);
+    };
+    this._transport.onclose = onClose;
   }
 
-  static async connect(parent: SdkObject, options: BrowserOptions, wsEndpoint: string): Promise<BrowshBrowser> {
-    const browser = new BrowshBrowser(parent, options, wsEndpoint);
-    return browser;
+  static async connect(parent: SdkObject, transport: ConnectionTransport, options: BrowserOptions): Promise<BrowshBrowser> {
+    return new BrowshBrowser(parent, transport, options);
   }
 
   override async doCreateNewContext(options: types.BrowserContextOptions): Promise<BrowserContext> {
     // Browsh doesn't support multiple isolated contexts within one process.
-    // Each "new context" would need a separate Browsh instance.
-    // For now, return a context backed by the same Browsh instance.
-    // The MCP layer's BrowshContextFactory handles the full isolation by
-    // spawning separate processes.
+    // The MCP layer handles newContext() by spawning a separate Browsh instance.
     throw new Error('Browsh does not support multiple contexts in a single browser instance. Use playwright.browsh.launch() for each isolated context.');
   }
 
@@ -73,13 +81,7 @@ export class BrowshBrowser extends Browser {
   }
 
   wsEndpoint(): string {
-    return this._wsEndpoint;
-  }
-
-  _setConnected(connected: boolean): void {
-    this._connected = connected;
-    if (!connected)
-      this.emit(Browser.Events.Disconnected);
+    return this.options.wsEndpoint || '';
   }
 
   _setVersion(version: string): void {

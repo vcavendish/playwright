@@ -34,9 +34,10 @@ import type { RecentLogsCollector } from '../utils/debugLogger';
  *
  * Key differences from other browsers:
  * - Uses WebSocket JSON command protocol (not CDP or Juggler)
- * - Each launch() spawns a separate Browsh+Firefox process
- * - browser.newContext() is handled by the MCP layer spawning new instances
+ * - Each launch() spawns a separate Browsh+Firefox process on its own port
+ * - browser.newContext() spawns a new Browsh process (full isolation)
  * - No pipe transport — always connects via WebSocket
+ * - Port auto-assigned via `--remote-control-port=0` (or explicit port)
  */
 export class Browsh extends BrowserType {
   constructor(parent: SdkObject) {
@@ -44,8 +45,10 @@ export class Browsh extends BrowserType {
   }
 
   override async connectToTransport(transport: ConnectionTransport, options: BrowserOptions, browserLogsCollector: RecentLogsCollector): Promise<BrowshBrowser> {
-    const wsEndpoint = options.wsEndpoint || '';
-    return BrowshBrowser.connect(this.attribution.playwright, options, wsEndpoint);
+    // The base class already connected to browsh's WebSocket via
+    // WebSocketTransport.connect(). We wrap it in BrowshBrowser which
+    // tracks the transport for lifecycle management (close/disconnect).
+    return BrowshBrowser.connect(this.attribution.playwright, transport, options);
   }
 
   override doRewriteStartupLog(logs: string): string {
@@ -61,12 +64,18 @@ export class Browsh extends BrowserType {
   }
 
   override attemptToGracefullyCloseBrowser(transport: ConnectionTransport): void {
-    transport.send({ method: 'Browser.close', params: {}, id: -1 });
+    // Browsh protocol: send shutdown command to gracefully close
+    transport.send({ method: 'shutdown', params: {}, id: -1 });
   }
 
   override async defaultArgs(options: types.LaunchOptions, isPersistent: boolean, userDataDir: string): Promise<string[]> {
     const { args = [], headless } = options;
     const browshArgs = ['--remote-control'];
+
+    // Pass port if specified (used by multi-instance support in Phase 6F)
+    const port = (options as any).__browshPort;
+    if (port !== undefined)
+      browshArgs.push(`--remote-control-port=${port}`);
 
     // Headless for browsh means no terminal TUI — just the WebSocket API
     if (headless)
@@ -77,27 +86,29 @@ export class Browsh extends BrowserType {
   }
 
   override supportsPipeTransport(): boolean {
-    // Browsh uses WebSocket, not pipe
     return false;
   }
 
   override waitForReadyState(options: types.LaunchOptions, browserLogsCollector: RecentLogsCollector): Promise<{ wsEndpoint?: string }> {
-    // Wait for browsh to signal it's ready by looking for the ready message
-    // in its stdout. The port is extracted from the log message.
     const result = new ManualPromise<{ wsEndpoint?: string }>();
-    const port = (options as any).__browshPort || 3335;
 
     browserLogsCollector.onMessage((message: string) => {
-      // Look for browsh startup ready message
-      if (message.includes('Remote control listening') || message.includes('WebSocket server started'))
+      // Browsh logs "Remote control listening on :PORT" or similar on ready
+      if (message.includes('Remote control listening') || message.includes('WebSocket server started')) {
+        // Try to extract port from log message
+        const portMatch = message.match(/:(\d+)/);
+        const port = portMatch ? parseInt(portMatch[1], 10) : ((options as any).__browshPort || 3335);
         result.resolve({ wsEndpoint: `ws://127.0.0.1:${port}` });
+      }
     });
 
-    // Also set a timeout fallback — if browsh doesn't print the expected
-    // message, assume it's ready after a reasonable delay
+    // Fallback: if browsh doesn't print the expected ready message,
+    // assume it's ready after a timeout using the configured port
     setTimeout(() => {
-      if (!result.isDone())
+      if (!result.isDone()) {
+        const port = (options as any).__browshPort || 3335;
         result.resolve({ wsEndpoint: `ws://127.0.0.1:${port}` });
+      }
     }, 10000);
 
     return result;
