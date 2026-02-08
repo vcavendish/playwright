@@ -18,13 +18,73 @@ Make sure you're running Node.js 20 or later.
 node --version
 ```
 
-Clone the repository. If you plan to send a pull request, it might be better to [fork the repository](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo) first.
+### Fork workflow
+
+If you plan to contribute, you should **fork the repository** first. Here's how the fork workflow works:
+
+1. **Fork the repository** on GitHub by clicking the "Fork" button at https://github.com/microsoft/playwright. This creates a copy of the repository in your GitHub account (e.g., `yourusername/playwright`).
+
+2. **Clone your fork** (not the original repository):
+   ```bash
+   git clone https://github.com/yourusername/playwright
+   cd playwright
+   ```
+
+3. **Add the upstream remote** to track the original repository:
+   ```bash
+   git remote add upstream https://github.com/microsoft/playwright.git
+   ```
+
+4. **Make your changes** in a new branch:
+   ```bash
+   git checkout -b my-feature-branch
+   # Make your changes...
+   git add .
+   git commit -m "feat: description of your changes"
+   ```
+
+5. **Push to your fork**:
+   ```bash
+   git push origin my-feature-branch
+   ```
+
+6. **Create a pull request** from your fork to the upstream repository:
+   - Go to https://github.com/microsoft/playwright
+   - GitHub will usually show a banner prompting you to create a pull request
+   - The PR should go from `yourusername/playwright:my-feature-branch` → `microsoft/playwright:main`
+
+**Important**: You create a pull request directly from your fork to the upstream repository (`microsoft/playwright`). You do **not** create a PR to your own fork and then sync it later.
+
+### Keeping your fork in sync
+
+To keep your fork up to date with the upstream repository:
+
 ```bash
-git clone https://github.com/microsoft/playwright
-cd playwright
+# Fetch the latest changes from upstream
+git fetch upstream
+
+# Switch to your main branch
+git checkout main
+
+# Merge upstream changes
+git merge upstream/main
+
+# Push the updates to your fork
+git push origin main
 ```
 
-Install dependencies and run the build in watch mode.
+If you're working on a branch and the upstream main has been updated, you may want to rebase your branch:
+
+```bash
+git checkout my-feature-branch
+git fetch upstream
+git rebase upstream/main
+git push origin my-feature-branch --force-with-lease
+```
+
+### Setting up your development environment
+
+After cloning your fork, install dependencies and run the build in watch mode.
 ```bash
 npm ci
 npm run watch
