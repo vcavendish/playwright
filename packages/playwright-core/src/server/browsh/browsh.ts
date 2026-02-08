@@ -92,7 +92,7 @@ export class Browsh extends BrowserType {
   }
 
   override async defaultArgs(options: types.LaunchOptions, isPersistent: boolean, userDataDir: string): Promise<string[]> {
-    const { args = [], headless } = options;
+    const { args = [] } = options;
     const browshArgs = ['--remote-control'];
 
     // Auto-assign a free port for multi-instance support.
@@ -104,9 +104,10 @@ export class Browsh extends BrowserType {
     }
     browshArgs.push(`--remote-control-port=${port}`);
 
-    // Headless for browsh means no terminal TUI — just the WebSocket API
-    if (headless)
-      browshArgs.push('--headless');
+    // Browsh's internal Firefox is headless by default.
+    // Use --firefox.with-gui only when headed mode is explicitly requested.
+    if (options.headless === false)
+      browshArgs.push('--firefox.with-gui');
 
     browshArgs.push(...args);
     return browshArgs;

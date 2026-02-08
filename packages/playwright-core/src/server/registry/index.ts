@@ -1028,6 +1028,11 @@ export class Registry {
   }
 
   private _findBrowshExecutable(): string | undefined {
+    // Allow override via environment variable (same pattern as other browsers)
+    if (process.env.PLAYWRIGHT_BROWSH_PATH) {
+      if (canAccessFile(process.env.PLAYWRIGHT_BROWSH_PATH))
+        return process.env.PLAYWRIGHT_BROWSH_PATH;
+    }
     // Look for browsh on PATH
     const name = process.platform === 'win32' ? 'browsh.exe' : 'browsh';
     const pathDirs = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');

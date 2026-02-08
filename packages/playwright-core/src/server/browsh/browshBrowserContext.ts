@@ -44,6 +44,12 @@ export class BrowshBrowserContext extends BrowserContext {
 
   override async _initialize() {
     await super._initialize();
+    // In persistent context mode, create a default page immediately.
+    // Chrome/Firefox get this from the browser process auto-creating a tab;
+    // browsh already has a tab open, so we create the Playwright Page to
+    // represent it. _loadDefaultContext() expects a page to exist.
+    if (this._browser.options.persistent)
+      await this.doCreateNewPage();
   }
 
   override possiblyUninitializedPages(): Page[] {

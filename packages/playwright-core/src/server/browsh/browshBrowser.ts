@@ -57,11 +57,24 @@ export class BrowshBrowser extends Browser {
     // Optionally query version from browsh
     try {
       const versionData = await connection.send('version');
-      if (versionData?.version)
+      if (typeof versionData === 'string')
+        browser._version = versionData;
+      else if (versionData?.version)
         browser._version = versionData.version;
     } catch {
       // Browsh may not support version command yet — use default
     }
+
+    // Persistent context mode: create a default context like Chrome/Firefox do.
+    // launchPersistentContext() expects browser._defaultContext to exist so it
+    // can call _loadDefaultContext() on it.
+    if (options.persistent) {
+      browser._defaultContext = new BrowshBrowserContext(browser, options.persistent);
+      const contextId = browser._defaultContext._browserContextId || '__default__';
+      browser._contexts.set(contextId, browser._defaultContext as BrowshBrowserContext);
+      await (browser._defaultContext as BrowshBrowserContext)._initialize();
+    }
+
     return browser;
   }
 
