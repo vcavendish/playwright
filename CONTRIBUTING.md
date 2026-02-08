@@ -82,6 +82,8 @@ git rebase upstream/main
 git push origin my-feature-branch --force-with-lease
 ```
 
+Note: `--force-with-lease` is safer than `--force` as it ensures you don't overwrite someone else's work if the remote branch was updated since you last fetched.
+
 ### Setting up your development environment
 
 After cloning your fork, install dependencies and run the build in watch mode.
