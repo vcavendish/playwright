@@ -459,7 +459,10 @@ function mergeConfig(base: FullConfig, overrides: Config): FullConfig {
     ...pickDefined(base.browser),
     ...pickDefined(overrides.browser),
     browserName: overrides.browser?.browserName ?? base.browser?.browserName ?? 'chromium',
-    isolated: overrides.browser?.isolated ?? base.browser?.isolated ?? false,
+    // Browsh always uses isolated mode — each context is a separate process.
+    // Persistent contexts require launchPersistentContext() which browsh doesn't support.
+    isolated: overrides.browser?.isolated ?? base.browser?.isolated ??
+      ((overrides.browser?.browserName ?? base.browser?.browserName) === 'browsh' ? true : false),
     launchOptions: {
       ...pickDefined(base.browser?.launchOptions),
       ...pickDefined(overrides.browser?.launchOptions),

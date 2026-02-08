@@ -15,7 +15,7 @@
  */
 
 import { Browser } from '../browser';
-import { BrowserContext } from '../browserContext';
+import { BrowshBrowserContext } from './browshBrowserContext';
 
 import type { BrowshConnection } from './browshConnection';
 import type { BrowserOptions } from '../browser';
@@ -23,20 +23,20 @@ import type * as types from '../types';
 import type { SdkObject } from '../instrumentation';
 
 /**
- * BrowshBrowser represents a running Browsh instance. Each launch() or
- * newContext() spawns a separate Browsh+Firefox process on its own port,
- * providing full isolation.
+ * BrowshBrowser represents a running Browsh instance.
  *
- * Unlike Chrome/Firefox which support multiple BrowserContexts within one
- * process (isolated profiles), Browsh has no internal concept of isolated
- * profiles. browser.newContext() triggers the MCP layer to spawn a new
- * Browsh process — heavier but semantically correct isolation.
+ * Each Browsh process is a single-context browser. Unlike Chrome/Firefox
+ * which support multiple isolated BrowserContexts within one process,
+ * Browsh uses one Firefox tab per process. Each newContext() creates a
+ * BrowshBrowserContext that uses the single connection.
+ *
+ * For full isolation, callers should launch() separate instances.
  *
  * Architecture follows the same layering as other browsers:
  *   Transport (WebSocketTransport) → Connection (BrowshConnection) → Browser (BrowshBrowser)
  */
 export class BrowshBrowser extends Browser {
-  private _contexts: BrowserContext[] = [];
+  private _contexts = new Map<string, BrowshBrowserContext>();
   private _version: string = 'browsh-1.0';
   private _connected: boolean = true;
   readonly connection: BrowshConnection;
@@ -65,14 +65,18 @@ export class BrowshBrowser extends Browser {
     return browser;
   }
 
-  override async doCreateNewContext(options: types.BrowserContextOptions): Promise<BrowserContext> {
-    // Browsh doesn't support multiple isolated contexts within one process.
-    // The MCP layer handles newContext() by spawning a separate Browsh instance.
-    throw new Error('Browsh does not support multiple contexts in a single browser instance. Use playwright.browsh.launch() for each isolated context.');
+  override async doCreateNewContext(options: types.BrowserContextOptions): Promise<BrowshBrowserContext> {
+    const context = new BrowshBrowserContext(this, options);
+    this._contexts.set(context._browserContextId || '__default__', context);
+    context.on('close', () => {
+      this._contexts.delete(context._browserContextId || '__default__');
+    });
+    await context._initialize();
+    return context;
   }
 
-  override contexts(): BrowserContext[] {
-    return this._contexts;
+  override contexts(): BrowshBrowserContext[] {
+    return Array.from(this._contexts.values());
   }
 
   override isConnected(): boolean {
