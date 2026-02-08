@@ -15,7 +15,7 @@
  */
 
 import { BrowshBrowser } from './browshBrowser';
-import { BrowshTransport } from './browshTransport';
+import { BrowshConnection } from './browshConnection';
 import { wrapInASCIIBox } from '../utils/ascii';
 import { BrowserType } from '../browserType';
 import { ManualPromise } from '../../utils/isomorphic/manualPromise';
@@ -52,11 +52,11 @@ export class Browsh extends BrowserType {
   }
 
   override async connectToTransport(transport: ConnectionTransport, options: BrowserOptions, browserLogsCollector: RecentLogsCollector): Promise<BrowshBrowser> {
-    // Wrap the raw WebSocketTransport in BrowshTransport which translates
-    // between Playwright protocol and Browsh's native command format.
-    // Browsh never sees Playwright concepts — all translation happens here.
-    const browshTransport = new BrowshTransport(transport);
-    return BrowshBrowser.connect(this.attribution.playwright, browshTransport, options);
+    // Create a BrowshConnection that wraps the raw WebSocketTransport.
+    // Connection handles protocol translation (Playwright ↔ Browsh).
+    // Transport handles raw I/O. Same separation as CRConnection/FFConnection.
+    const connection = new BrowshConnection(transport, options.protocolLogger, browserLogsCollector);
+    return BrowshBrowser.connect(this.attribution.playwright, connection, options);
   }
 
   override doRewriteStartupLog(logs: string): string {

@@ -17,10 +17,10 @@
 import { Browser } from '../browser';
 import { BrowserContext } from '../browserContext';
 
+import type { BrowshConnection } from './browshConnection';
 import type { BrowserOptions } from '../browser';
 import type * as types from '../types';
 import type { SdkObject } from '../instrumentation';
-import type { ConnectionTransport } from '../transport';
 
 /**
  * BrowshBrowser represents a running Browsh instance. Each launch() or
@@ -32,30 +32,37 @@ import type { ConnectionTransport } from '../transport';
  * profiles. browser.newContext() triggers the MCP layer to spawn a new
  * Browsh process — heavier but semantically correct isolation.
  *
- * The transport here is the WebSocket connection to browsh's remote control
- * API. It is used for lifecycle management (close/disconnect detection)
- * and for sending protocol-translated commands.
+ * Architecture follows the same layering as other browsers:
+ *   Transport (WebSocketTransport) → Connection (BrowshConnection) → Browser (BrowshBrowser)
  */
 export class BrowshBrowser extends Browser {
   private _contexts: BrowserContext[] = [];
   private _version: string = 'browsh-1.0';
   private _connected: boolean = true;
-  private _transport: ConnectionTransport;
+  readonly connection: BrowshConnection;
 
-  constructor(parent: SdkObject, transport: ConnectionTransport, options: BrowserOptions) {
+  constructor(parent: SdkObject, connection: BrowshConnection, options: BrowserOptions) {
     super(parent, options);
-    this._transport = transport;
+    this.connection = connection;
 
-    // Monitor transport lifecycle
-    const onClose = () => {
+    // Monitor connection lifecycle
+    this.connection.on('disconnected', () => {
       this._connected = false;
       this.emit(Browser.Events.Disconnected);
-    };
-    this._transport.onclose = onClose;
+    });
   }
 
-  static async connect(parent: SdkObject, transport: ConnectionTransport, options: BrowserOptions): Promise<BrowshBrowser> {
-    return new BrowshBrowser(parent, transport, options);
+  static async connect(parent: SdkObject, connection: BrowshConnection, options: BrowserOptions): Promise<BrowshBrowser> {
+    const browser = new BrowshBrowser(parent, connection, options);
+    // Optionally query version from browsh
+    try {
+      const versionData = await connection.send('version');
+      if (versionData?.version)
+        browser._version = versionData.version;
+    } catch {
+      // Browsh may not support version command yet — use default
+    }
+    return browser;
   }
 
   override async doCreateNewContext(options: types.BrowserContextOptions): Promise<BrowserContext> {
