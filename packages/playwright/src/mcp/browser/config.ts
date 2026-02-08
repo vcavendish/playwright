@@ -121,7 +121,7 @@ type BrowserUserConfig = NonNullable<Config['browser']>;
 
 export type FullConfig = Config & {
   browser: Omit<BrowserUserConfig, 'browserName' | 'launchOptions' | 'contextOptions'> & {
-    browserName: 'chromium' | 'firefox' | 'webkit';
+    browserName: 'chromium' | 'firefox' | 'webkit' | 'browsh';
     launchOptions: NonNullable<BrowserUserConfig['launchOptions']>;
     contextOptions: NonNullable<BrowserUserConfig['contextOptions']>;
     isolated: boolean;
@@ -210,7 +210,7 @@ async function validateConfig(config: FullConfig): Promise<void> {
 }
 
 export function configFromCLIOptions(cliOptions: CLIOptions): Config & { configFile?: string } {
-  let browserName: 'chromium' | 'firefox' | 'webkit' | undefined;
+  let browserName: 'chromium' | 'firefox' | 'webkit' | 'browsh' | undefined;
   let channel: string | undefined;
   switch (cliOptions.browser) {
     case 'chrome':
@@ -230,6 +230,9 @@ export function configFromCLIOptions(cliOptions: CLIOptions): Config & { configF
       break;
     case 'webkit':
       browserName = 'webkit';
+      break;
+    case 'browsh':
+      browserName = 'browsh';
       break;
   }
 

@@ -25,12 +25,15 @@ import { startTraceViewerServer } from 'playwright-core/lib/server';
 import { logUnhandledError, testDebug } from '../log';
 import { outputDir, outputFile } from './config';
 import { firstRootPath } from '../sdk/server';
+import { BrowshContextFactory } from './browshContextFactory';
 
 import type { FullConfig } from './config';
 import type { LaunchOptions, BrowserContextOptions } from '../../../../playwright-core/src/client/types';
 import type { ClientInfo } from '../sdk/server';
 
 export function contextFactory(config: FullConfig): BrowserContextFactory {
+  if (config.browser.browserName === 'browsh')
+    return new BrowshContextFactory(config);
   if (config.sharedBrowserContext)
     return SharedContextFactory.create(config);
   if (config.browser.remoteEndpoint)
