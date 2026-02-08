@@ -166,6 +166,15 @@ class BrowshPage extends EventEmitter {
     return result.data;
   }
 
+  // Internal evaluate used by MCP evaluate tool (calls page._evaluateFunction)
+  async _evaluateFunction(fn: string): Promise<any> {
+    // The MCP tool passes a function string like '() => document.title'
+    // We need to invoke it, not just evaluate the expression
+    const script = fn.includes('=>') ? `(${fn})()` : fn;
+    const result = await this._send('evaluate', script);
+    return result.data;
+  }
+
   // --- Snapshots & Locators ---
   async _snapshotForAI(_options?: any): Promise<{ full: string; incremental?: string }> {
     const result = await this._send('get_aria_snapshot');
@@ -274,6 +283,14 @@ class BrowshLocator {
   async click(_options?: any): Promise<void> {
     if (!this._ref) throw new Error('Cannot click without ref');
     await (this._page as any)._send('click_ref', this._ref);
+  }
+
+  async _evaluateFunction(fn: string): Promise<any> {
+    if (this._ref)
+      await (this._page as any)._send('click_ref', this._ref);
+    const script = fn.includes('=>') ? `(${fn})()` : fn;
+    const result = await (this._page as any)._send('evaluate', script);
+    return result.data;
   }
 
   async dblclick(_options?: any): Promise<void> {
