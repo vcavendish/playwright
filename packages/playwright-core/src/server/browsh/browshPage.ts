@@ -81,42 +81,17 @@ export class BrowshPage implements PageDelegate {
     mainFrame._contextCreated('main', mainContext);
     mainFrame._contextCreated('utility', utilityContext);
 
-    // Override Frame.click to handle aria-ref= selectors for browsh.
+    // Override Frame methods that go through ElementHandle (which requires
+    // persistent object references that Marionette can't provide).
     //
-    // Standard Playwright resolves aria-ref via InjectedScript's cached element
-    // map, gets an ElementHandle, then calls handle._click() which uses
-    // getBoundingBox + page.mouse.click(x, y). Browsh can't do coordinate-based
-    // clicks (Marionette doesn't return persistent element handles).
+    // Upstream Playwright: querySelector → ElementHandle → action(coordinates)
+    // Browsh: querySelector + action in ONE evaluate call via Marionette.
     //
-    // Instead, we query the element via InjectedScript and call .click() on it
-    // in a single evaluate — the InjectedScript IS properly injected now (stored
-    // on window via rawEvaluateHandle), so its element map is populated by
-    // snapshotForAI and aria-ref= queries work through querySelectorAll.
-    const connection = this._connection;
-    const originalClick = mainFrame.click.bind(mainFrame);
-    mainFrame.click = async function(progress, selector, options) {
-      const ariaRefMatch = selector.match(/^aria-ref=(.+)$/);
-      if (ariaRefMatch) {
-        const ref = ariaRefMatch[1];
-        progress.log(`browsh: clicking element with aria-ref "${ref}"`);
-        // Use InjectedScript's element map to find and click the element
-        // in a single evaluate call (avoids ElementHandle serialization issue).
-        const clicked = await mainFrame.evaluateExpression(`(() => {
-          // Find InjectedScript instance on window (injected by rawEvaluateHandle)
-          const injKey = Object.keys(window).find(k => k.startsWith('__pw_handle_') && window[k]?.querySelectorAll);
-          if (!injKey) throw new Error('InjectedScript not found on window');
-          const injected = window[injKey];
-          const parsed = injected.parseSelector('aria-ref=${ref}');
-          const elements = injected.querySelectorAll(parsed, document);
-          if (!elements.length) throw new Error('Element not found for aria-ref=${ref}');
-          elements[0].click();
-          return true;
-        })()`, { isFunction: false, returnByValue: true });
-        if (!clicked) throw new Error(`Failed to click aria-ref=${ref}`);
-        return;
-      }
-      return originalClick(progress, selector, options);
-    };
+    // The InjectedScript is already injected into the page (on window.__pw_handle_N).
+    // We use it to resolve selectors, then act on the DOM element directly.
+    // This is browsh brokering the interaction — Playwright never touches
+    // browsh's Firefox directly.
+    this._installFrameOverrides(mainFrame);
 
     // Fire initial lifecycle events so _loadDefaultContext can resolve.
     // Browsh's tab is already loaded when we connect (it opens brow.sh by default).
@@ -124,6 +99,174 @@ export class BrowshPage implements PageDelegate {
     this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
     // Signal that the page is ready for use.
     this._page.reportAsNew(undefined);
+  }
+
+  /**
+   * Install Frame method overrides that resolve selectors and perform actions
+   * in a single Marionette evaluate call. This avoids the ElementHandle pipeline
+   * which requires persistent object references (objectId) that Marionette can't provide.
+   */
+  private _installFrameOverrides(frame: frames.Frame) {
+    const browshPage = this;
+
+    // Helper: resolve selector and run action JS on the element, all in one evaluate.
+    // actionJs receives `el` (the DOM element) and `injected` (InjectedScript) and
+    // should return a serializable value.
+    const selectorAction = async (selector: string, actionJs: string, progress?: any): Promise<any> => {
+      // Ensure InjectedScript is injected on the current page.
+      // After navigation, the old window properties are gone and the new context
+      // lazily re-injects when injectedScript() is called.
+      const context = await frame._context('utility');
+      await (context as any).injectedScript();
+
+      const script = `(() => {
+        const injKey = Object.keys(window).find(k => k.startsWith('__pw_handle_') && window[k]?.querySelectorAll);
+        if (!injKey) throw new Error('InjectedScript not found');
+        const injected = window[injKey];
+        const parsed = injected.parseSelector(${JSON.stringify(selector)});
+        const elements = injected.querySelectorAll(parsed, document);
+        if (!elements.length) throw new Error('Element not found: ${selector.replace(/'/g, "\\'")}');
+        const el = elements[0];
+        ${actionJs}
+      })()`;
+      return await frame.evaluateExpression(script, { isFunction: false, returnByValue: true });
+    };
+
+    const originalClick = frame.click.bind(frame);
+    frame.click = async function(progress, selector, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: click ${selector}`);
+        await selectorAction(selector, 'el.click(); return true;', progress);
+        return;
+      }
+      return originalClick(progress, selector, options);
+    };
+
+    const originalFill = frame.fill.bind(frame);
+    frame.fill = async function(progress, selector, value, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: fill ${selector}`);
+        const escaped = JSON.stringify(value);
+        await selectorAction(selector, `
+          el.focus();
+          el.value = ${escaped};
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        `, progress);
+        return;
+      }
+      return originalFill(progress, selector, value, options);
+    };
+
+    const originalHover = frame.hover.bind(frame);
+    frame.hover = async function(progress, selector, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: hover ${selector}`);
+        await selectorAction(selector, `
+          el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+          return true;
+        `, progress);
+        return;
+      }
+      return originalHover(progress, selector, options);
+    };
+
+    const originalFocus = frame.focus.bind(frame);
+    frame.focus = async function(progress, selector, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: focus ${selector}`);
+        await selectorAction(selector, 'el.focus(); return true;', progress);
+        return;
+      }
+      return originalFocus(progress, selector, options);
+    };
+
+    const originalType = frame.type.bind(frame);
+    frame.type = async function(progress, selector, text, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: type into ${selector}`);
+        const escaped = JSON.stringify(text);
+        await selectorAction(selector, `
+          el.focus();
+          for (const ch of ${escaped}) {
+            el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value += ch;
+            el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        `, progress);
+        return;
+      }
+      return originalType(progress, selector, text, options);
+    };
+
+    const originalCheck = frame.check.bind(frame);
+    frame.check = async function(progress, selector, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: check ${selector}`);
+        await selectorAction(selector, `
+          if (!el.checked) el.click();
+          return true;
+        `, progress);
+        return;
+      }
+      return originalCheck(progress, selector, options);
+    };
+
+    const originalUncheck = frame.uncheck.bind(frame);
+    frame.uncheck = async function(progress, selector, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: uncheck ${selector}`);
+        await selectorAction(selector, `
+          if (el.checked) el.click();
+          return true;
+        `, progress);
+        return;
+      }
+      return originalUncheck(progress, selector, options);
+    };
+
+    const originalSelectOption = frame.selectOption.bind(frame);
+    frame.selectOption = async function(progress, selector, elements, values, options) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: selectOption ${selector}`);
+        const valuesJson = JSON.stringify(values);
+        await selectorAction(selector, `
+          const vals = ${valuesJson};
+          for (const opt of el.options) {
+            opt.selected = vals.some(v => v.value === opt.value || v.label === opt.text);
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return Array.from(el.selectedOptions).map(o => o.value);
+        `, progress);
+        return [];
+      }
+      return originalSelectOption(progress, selector, elements, values, options);
+    };
+
+    const originalAriaSnapshot = frame.ariaSnapshot.bind(frame);
+    frame.ariaSnapshot = async function(progress, selector) {
+      if (browshPage._isBrowshSelector(selector)) {
+        progress.log(`browsh: ariaSnapshot ${selector}`);
+        return await selectorAction(selector, `
+          return injected.ariaSnapshot(el, { mode: 'expect' });
+        `, progress) as string;
+      }
+      return originalAriaSnapshot(progress, selector);
+    };
+  }
+
+  /**
+   * Check if a selector should use browsh's single-evaluate path.
+   * All selectors go through browsh since ElementHandle doesn't work with Marionette.
+   */
+  private _isBrowshSelector(_selector: string): boolean {
+    return true;
   }
 
   async navigateFrame(frame: frames.Frame, url: string, _referrer: string | undefined): Promise<frames.GotoResult> {
