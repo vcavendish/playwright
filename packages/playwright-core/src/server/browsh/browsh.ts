@@ -92,8 +92,10 @@ export class Browsh extends BrowserType {
     // Auto-assign marionette port to avoid conflicts with default 2828
     browshArgs.push('--marionette-port=0');
 
-    if (options.headless === false)
-      browshArgs.push('--firefox.with-gui');
+    // Note: --firefox.with-gui is NOT passed for headless:false.
+    // Browsh's value is its TUI rendering — showing Firefox's native GUI
+    // is a debugging aid, not normal operation. Users who need it can
+    // pass it explicitly via args: ['--firefox.with-gui'].
 
     browshArgs.push(...args);
     return browshArgs;

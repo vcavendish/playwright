@@ -65,6 +65,21 @@ export class BrowshBrowser extends Browser {
       // Browsh may not support version command yet — use default
     }
 
+    // Wait for browsh to be fully ready (Marionette + webextension connected).
+    // The RC port opens before Firefox/Marionette are ready, so we poll
+    // get_state until an active tab exists (meaning the extension connected).
+    const startTime = Date.now();
+    const timeout = 30000;
+    while (Date.now() - startTime < timeout) {
+      try {
+        const state = await connection.send('get_state');
+        if (state && (state.url || state.title)) break;
+      } catch {
+        // Expected while Firefox is still starting
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
     // Persistent context mode: create a default context like Chrome/Firefox do.
     // launchPersistentContext() expects browser._defaultContext to exist so it
     // can call _loadDefaultContext() on it.
