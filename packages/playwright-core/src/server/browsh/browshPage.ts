@@ -79,6 +79,16 @@ export class BrowshPage implements PageDelegate {
     mainFrame._contextCreated('main', mainContext);
     mainFrame._contextCreated('utility', utilityContext);
 
+    // Override snapshotForAI to use browsh's native get_aria_snapshot command
+    // instead of the standard path that requires Playwright's injected script.
+    // Browsh's get_aria_snapshot runs a 150-line JS ARIA tree walker via
+    // Marionette, producing Playwright-compatible YAML with role/name/refs.
+    const connection = this._connection;
+    this._page.snapshotForAI = async (_progress, _options) => {
+      const snapshot = await connection.send('get_aria_snapshot');
+      return { full: snapshot?.full || '' };
+    };
+
     // Fire initial lifecycle events so _loadDefaultContext can resolve.
     // Browsh's tab is already loaded when we connect (it opens brow.sh by default).
     this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
@@ -88,42 +98,49 @@ export class BrowshPage implements PageDelegate {
   }
 
   async navigateFrame(frame: frames.Frame, url: string, _referrer: string | undefined): Promise<frames.GotoResult> {
+    const previousUrl = this._page.mainFrame().url();
     await this._connection.send('navigate', { url });
 
     // Wait for the page to actually load. Browsh's navigate is fire-and-forget
     // (sends to webextension, returns immediately). We poll get_state until
-    // the URL changes, then poll evaluate until MarionetteCommands actor is ready.
+    // the URL changes to the target, then poll evaluate until MarionetteCommands
+    // actor is ready for the new document.
+    const targetOrigin = new URL(url).origin;
+    const sameOrigin = previousUrl.startsWith(targetOrigin);
     const startTime = Date.now();
     const timeout = 30000;
-    while (Date.now() - startTime < timeout) {
-      try {
-        const state = await this._connection.send('get_state');
-        if (state?.url && state.url !== 'about:blank' && state.url !== 'https://www.brow.sh/') {
-          // URL changed — now verify evaluate works (MarionetteCommands actor ready)
-          try {
-            await this._connection.send('evaluate', { expression: '1' });
-            break;
-          } catch {
-            // Actor not ready yet
+
+    if (sameOrigin) {
+      // Same-origin navigation: the URL may not change (e.g., navigating
+      // from example.com to example.com). Wait a moment for the navigation
+      // to start, then wait for evaluate to succeed on the new document.
+      await new Promise(r => setTimeout(r, 1000));
+      await this._waitForNavigationReady();
+    } else {
+      // Cross-origin: wait for URL to change to target origin.
+      while (Date.now() - startTime < timeout) {
+        try {
+          const state = await this._connection.send('get_state');
+          if (state?.url && state.url.startsWith(targetOrigin)) {
+            // URL changed — now verify evaluate works (MarionetteCommands actor ready)
+            try {
+              await this._connection.send('evaluate', { expression: '1' });
+              break;
+            } catch {
+              // Actor not ready yet
+            }
           }
+        } catch {
+          // Still loading
         }
-      } catch {
-        // Still loading
+        await new Promise(r => setTimeout(r, 500));
       }
-      await new Promise(r => setTimeout(r, 500));
     }
 
     // Signal the frame that a new document navigation occurred.
     const documentId = createGuid();
     this._page.frameManager.frameCommittedNewDocumentNavigation(this._mainFrameId, url, '', documentId, false);
-
-    // Recreate execution contexts for the new document.
-    const delegate = new BrowshExecutionContext(this._connection);
-    const mainContext = new FrameExecutionContext(delegate, frame, 'main');
-    const utilityContext = new FrameExecutionContext(delegate, frame, 'utility');
-    frame._contextCreated('main', mainContext);
-    frame._contextCreated('utility', utilityContext);
-
+    this._recreateExecutionContexts();
     this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
     this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
     return { newDocumentId: documentId };
@@ -131,16 +148,28 @@ export class BrowshPage implements PageDelegate {
 
   async reload(): Promise<void> {
     await this._connection.send('reload');
+    await this._waitForNavigationReady();
     const url = this._page.mainFrame().url();
     const documentId = createGuid();
     this._page.frameManager.frameCommittedNewDocumentNavigation(this._mainFrameId, url, '', documentId, false);
+    this._recreateExecutionContexts();
     this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
     this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
   }
 
   async goBack(): Promise<boolean> {
     try {
+      const urlBefore = this._page.mainFrame().url();
       await this._connection.send('back');
+      await this._waitForUrlChange(urlBefore);
+      await this._waitForNavigationReady();
+      const state = await this._connection.send('get_state');
+      const url = state?.url || this._page.mainFrame().url();
+      const documentId = createGuid();
+      this._page.frameManager.frameCommittedNewDocumentNavigation(this._mainFrameId, url, '', documentId, false);
+      this._recreateExecutionContexts();
+      this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
+      this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
       return true;
     } catch {
       return false;
@@ -149,11 +178,59 @@ export class BrowshPage implements PageDelegate {
 
   async goForward(): Promise<boolean> {
     try {
+      const urlBefore = this._page.mainFrame().url();
       await this._connection.send('forward');
+      await this._waitForUrlChange(urlBefore);
+      await this._waitForNavigationReady();
+      const state = await this._connection.send('get_state');
+      const url = state?.url || this._page.mainFrame().url();
+      const documentId = createGuid();
+      this._page.frameManager.frameCommittedNewDocumentNavigation(this._mainFrameId, url, '', documentId, false);
+      this._recreateExecutionContexts();
+      this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'load');
+      this._page.frameManager.frameLifecycleEvent(this._mainFrameId, 'domcontentloaded');
       return true;
     } catch {
       return false;
     }
+  }
+
+  /** Wait for the URL to change from the given value (browsh commands are fire-and-forget). */
+  private async _waitForUrlChange(previousUrl: string) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try {
+        const state = await this._connection.send('get_state');
+        if (state?.url && state.url !== previousUrl)
+          return;
+      } catch {
+        // Still loading
+      }
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+
+  /** Wait for evaluate to succeed after navigation (MarionetteCommands actor ready). */
+  private async _waitForNavigationReady() {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try {
+        await this._connection.send('evaluate', { expression: '1' });
+        return;
+      } catch {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+  }
+
+  /** Recreate execution contexts after navigation invalidates the old document. */
+  private _recreateExecutionContexts() {
+    const frame = this._page.mainFrame();
+    const delegate = new BrowshExecutionContext(this._connection);
+    const mainContext = new FrameExecutionContext(delegate, frame, 'main');
+    const utilityContext = new FrameExecutionContext(delegate, frame, 'utility');
+    frame._contextCreated('main', mainContext);
+    frame._contextCreated('utility', utilityContext);
   }
 
   async addInitScript(_initScript: InitScript): Promise<void> {

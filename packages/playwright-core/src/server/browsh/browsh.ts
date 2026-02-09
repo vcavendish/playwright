@@ -89,13 +89,11 @@ export class Browsh extends BrowserType {
       (options as any).__browshPort = port;
     }
     browshArgs.push(`--remote-control-port=${port}`);
-    // Auto-assign marionette port to avoid conflicts with default 2828
+    // Auto-assign marionette port; websocket port controlled by XPI experiments API
     browshArgs.push('--marionette-port=0');
-
-    // Note: --firefox.with-gui is NOT passed for headless:false.
-    // Browsh's value is its TUI rendering — showing Firefox's native GUI
-    // is a debugging aid, not normal operation. Users who need it can
-    // pass it explicitly via args: ['--firefox.with-gui'].
+    // Pass --websocket-port=0 for multi-instance only if user didn't specify
+    if (!args.some(a => a.startsWith('--websocket-port')))
+      browshArgs.push('--websocket-port=3334');
 
     browshArgs.push(...args);
     return browshArgs;
