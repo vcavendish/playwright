@@ -72,6 +72,8 @@ export class BrowshPage implements PageDelegate {
   async initialize() {
     // Create execution contexts for the main frame so evaluate/title/etc work.
     // Browsh delegates JS evaluation to Marionette via its remote control API.
+    // InjectedScript and UtilityScript are injected into the page via window
+    // properties (see BrowshExecutionContext.rawEvaluateHandle).
     const mainFrame = this._page.mainFrame();
     const delegate = new BrowshExecutionContext(this._connection);
     const mainContext = new FrameExecutionContext(delegate, mainFrame, 'main');
@@ -79,14 +81,41 @@ export class BrowshPage implements PageDelegate {
     mainFrame._contextCreated('main', mainContext);
     mainFrame._contextCreated('utility', utilityContext);
 
-    // Override snapshotForAI to use browsh's native get_aria_snapshot command
-    // instead of the standard path that requires Playwright's injected script.
-    // Browsh's get_aria_snapshot runs a 150-line JS ARIA tree walker via
-    // Marionette, producing Playwright-compatible YAML with role/name/refs.
+    // Override Frame.click to handle aria-ref= selectors for browsh.
+    //
+    // Standard Playwright resolves aria-ref via InjectedScript's cached element
+    // map, gets an ElementHandle, then calls handle._click() which uses
+    // getBoundingBox + page.mouse.click(x, y). Browsh can't do coordinate-based
+    // clicks (Marionette doesn't return persistent element handles).
+    //
+    // Instead, we query the element via InjectedScript and call .click() on it
+    // in a single evaluate — the InjectedScript IS properly injected now (stored
+    // on window via rawEvaluateHandle), so its element map is populated by
+    // snapshotForAI and aria-ref= queries work through querySelectorAll.
     const connection = this._connection;
-    this._page.snapshotForAI = async (_progress, _options) => {
-      const snapshot = await connection.send('get_aria_snapshot');
-      return { full: snapshot?.full || '' };
+    const originalClick = mainFrame.click.bind(mainFrame);
+    mainFrame.click = async function(progress, selector, options) {
+      const ariaRefMatch = selector.match(/^aria-ref=(.+)$/);
+      if (ariaRefMatch) {
+        const ref = ariaRefMatch[1];
+        progress.log(`browsh: clicking element with aria-ref "${ref}"`);
+        // Use InjectedScript's element map to find and click the element
+        // in a single evaluate call (avoids ElementHandle serialization issue).
+        const clicked = await mainFrame.evaluateExpression(`(() => {
+          // Find InjectedScript instance on window (injected by rawEvaluateHandle)
+          const injKey = Object.keys(window).find(k => k.startsWith('__pw_handle_') && window[k]?.querySelectorAll);
+          if (!injKey) throw new Error('InjectedScript not found on window');
+          const injected = window[injKey];
+          const parsed = injected.parseSelector('aria-ref=${ref}');
+          const elements = injected.querySelectorAll(parsed, document);
+          if (!elements.length) throw new Error('Element not found for aria-ref=${ref}');
+          elements[0].click();
+          return true;
+        })()`, { isFunction: false, returnByValue: true });
+        if (!clicked) throw new Error(`Failed to click aria-ref=${ref}`);
+        return;
+      }
+      return originalClick(progress, selector, options);
     };
 
     // Fire initial lifecycle events so _loadDefaultContext can resolve.
