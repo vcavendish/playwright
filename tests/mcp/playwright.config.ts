@@ -58,5 +58,6 @@ export default defineConfig<TestOptions>({
     { name: 'firefox', use: { mcpBrowser: 'firefox' }, metadata: { ...metadata, browserName: 'firefox' }, testDir },
     { name: 'webkit', use: { mcpBrowser: 'webkit' }, metadata: { ...metadata, browserName: 'webkit' }, testDir },
     ... process.platform === 'win32' ? [{ name: 'msedge', use: { mcpBrowser: 'msedge' }, metadata: { ...metadata, browserName: 'chromium', channel: 'msedge' }, testDir }] : [],
+    { name: 'browsh', use: { mcpBrowser: 'browsh' }, metadata: { ...metadata, browserName: 'browsh' }, testDir },
   ],
 });

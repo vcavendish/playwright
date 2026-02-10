@@ -761,6 +761,7 @@ Playwright:
     chromium: BrowserType
     firefox: BrowserType
     webkit: BrowserType
+    browsh: BrowserType
     android: Android
     electron: Electron
     utils: LocalUtils?

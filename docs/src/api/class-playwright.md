@@ -243,6 +243,12 @@ Selectors can be used to install custom selector engines. See
 
 This object can be used to launch or connect to WebKit, returning instances of [Browser].
 
+## property: Playwright.browsh
+* since: v1.50
+- type: <[BrowserType]>
+
+This object can be used to launch or connect to Browsh, returning instances of [Browser].
+
 ## method: Playwright.close
 * since: v1.9
 * langs: java

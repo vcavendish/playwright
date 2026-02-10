@@ -206,9 +206,17 @@ export abstract class BrowserType extends SdkObject {
     let transport: ConnectionTransport | undefined = undefined;
     let browserProcess: BrowserProcess | undefined = undefined;
     const exitPromise = new ManualPromise();
+    const processOptions = this.launchProcessOptions();
+    let launchCommand = prepared.executable;
+    let launchArgs = prepared.browserArguments;
+    if (processOptions.wrapCommand) {
+      const wrapped = processOptions.wrapCommand(launchCommand, launchArgs);
+      launchCommand = wrapped.command;
+      launchArgs = wrapped.args;
+    }
     const { launchedProcess, gracefullyClose, kill } = await launchProcess({
-      command: prepared.executable,
-      args: prepared.browserArguments,
+      command: launchCommand,
+      args: launchArgs,
       env: this.amendEnvironment(env, prepared.userDataDir, isPersistent, options),
       handleSIGINT,
       handleSIGTERM,
@@ -218,6 +226,10 @@ export abstract class BrowserType extends SdkObject {
         browserLogsCollector.log(message);
       },
       stdio: 'pipe',
+      detached: processOptions.detached,
+      stdioOverride: processOptions.stdioOverride,
+      shell: processOptions.shell,
+      windowsHide: processOptions.windowsHide,
       tempDirectories: prepared.tempDirectories,
       attemptToGracefullyClose: async () => {
         if ((options as any).__testHookGracefullyClose)
@@ -328,6 +340,20 @@ export abstract class BrowserType extends SdkObject {
 
   supportsPipeTransport(): boolean {
     return true;
+  }
+
+  // Override to customize how the browser process is spawned.
+  // Returns spawn options merged into the launchProcess call.
+  // `wrapCommand` transforms the executable and args before spawn — used by
+  // TUI browsers that need a real console window (e.g. `start` on Windows).
+  launchProcessOptions(): {
+    detached?: boolean,
+    stdioOverride?: import('child_process').StdioOptions,
+    shell?: boolean,
+    windowsHide?: boolean,
+    wrapCommand?: (command: string, args: string[]) => { command: string, args: string[] },
+  } {
+    return {};
   }
 
   getExecutableName(options: types.LaunchOptions): string {

@@ -209,7 +209,7 @@ export type Fixtures<T extends {} = {}, W extends {} = {}, PT extends {} = {}, P
   [K in Exclude<keyof T, keyof PW | keyof PT>]?: TestFixtureValue<T[K], T & W & PT & PW> | [TestFixtureValue<T[K], T & W & PT & PW>, { scope?: 'test', auto?: boolean, option?: boolean, timeout?: number | undefined, title?: string, box?: boolean | 'self' }];
 };
 
-type BrowserName = 'chromium' | 'firefox' | 'webkit';
+type BrowserName = 'chromium' | 'firefox' | 'webkit' | 'browsh';
 type BrowserChannel = Exclude<LaunchOptions['channel'], undefined>;
 type ColorScheme = Exclude<BrowserContextOptions['colorScheme'], undefined>;
 type ClientCertificate = Exclude<BrowserContextOptions['clientCertificates'], undefined>[0];

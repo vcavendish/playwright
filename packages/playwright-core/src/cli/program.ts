@@ -673,6 +673,7 @@ function lookupBrowserType(options: Options): BrowserType {
     case 'cr': browserType = playwright.chromium; break;
     case 'wk': browserType = playwright.webkit; break;
     case 'ff': browserType = playwright.firefox; break;
+    case 'browsh': browserType = (playwright as any).browsh; break;
   }
   if (browserType)
     return browserType;

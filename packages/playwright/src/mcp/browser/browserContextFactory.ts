@@ -25,7 +25,6 @@ import { startTraceViewerServer } from 'playwright-core/lib/server';
 import { logUnhandledError, testDebug } from '../log';
 import { outputDir, outputFile } from './config';
 import { firstRootPath } from '../sdk/server';
-
 import type { FullConfig } from './config';
 import type { LaunchOptions, BrowserContextOptions } from '../../../../playwright-core/src/client/types';
 import type { ClientInfo } from '../sdk/server';
